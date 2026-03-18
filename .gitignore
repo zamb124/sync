@@ -44,5 +44,8 @@ htmlcov/
 .env
 .env.*
 
+# Local service secrets (не коммитим)
+conf.local.json
+
 # Docs draft (not part of repo)
 /Архитектура API для инжиниринг-чата_ от полиморфных объектов к гибким рабочим пространствам и двусторонней интеграции с GitLab.pdf

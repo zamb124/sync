@@ -9,6 +9,11 @@
     "broker_url": "redis://localhost:6381/1",
     "result_backend": "redis://localhost:6381/2"
   },
+  "selectel": {
+    "ip": "84.38.184.105",
+    "login": "root",
+    "password": "5GJrNxmKpDCQkrXyCyTG"
+  },
   "auth": {
     "jwt_secret": "dev-only-change-me-in-production",
     "session_secret": "dev-only-session-secret-change-me",
