@@ -33,22 +33,15 @@ bash deploy/setup-docker.sh
 
 Устанавливает Docker Engine на сервер и создаёт `/opt/sync/.env`.
 
-### 2. Заполнить .env на сервере
+### 2. Добавить секреты в GitHub
 
+Идёте в GitHub → репозиторий → Settings → Secrets and variables → Actions.  
+`.env` на сервере **не нужно создавать вручную** — GitHub Actions запишет его автоматически при каждом деплое.
+
+Сгенерировать значения для секретов:
 ```bash
-ssh root@84.38.184.105 'nano /opt/sync/.env'
-```
-
-```env
-IMAGE=ghcr.io/<ваш-github-username>/sync:latest
-POSTGRES_PASSWORD=<сгенерируйте-сильный-пароль>
-JWT_SECRET=<сгенерируйте-64-символьный-hex>
-```
-
-Сгенерировать секреты:
-```bash
-openssl rand -hex 32   # для пароля
-openssl rand -hex 32   # для JWT_SECRET
+openssl rand -hex 32   # POSTGRES_PASSWORD
+openssl rand -hex 32   # JWT_SECRET
 ```
 
 ### 3. Первый запуск (postgres + redis)
@@ -84,6 +77,8 @@ ssh-copy-id -i ~/.ssh/sync_deploy.pub root@84.38.184.105
 | `SERVER_USER` | `root` |
 | `SERVER_SSH_KEY` | содержимое `~/.ssh/sync_deploy` (приватный ключ) |
 | `GHCR_TOKEN` | Personal Access Token с правом `read:packages` |
+| `POSTGRES_PASSWORD` | вывод `openssl rand -hex 32` |
+| `JWT_SECRET` | вывод `openssl rand -hex 32` |
 
 ---
 

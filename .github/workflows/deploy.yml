@@ -71,20 +71,33 @@ jobs:
 
       - name: Deploy on server
         uses: appleboy/ssh-action@v1
+        env:
+          IMAGE_TAG: ${{ env.IMAGE }}:${{ needs.build-and-push.outputs.image_tag }}
+          POSTGRES_PASSWORD: ${{ secrets.POSTGRES_PASSWORD }}
+          JWT_SECRET: ${{ secrets.JWT_SECRET }}
+          GHCR_TOKEN: ${{ secrets.GHCR_TOKEN }}
+          GITHUB_ACTOR: ${{ github.actor }}
         with:
           host: ${{ secrets.SERVER_HOST }}
           username: ${{ secrets.SERVER_USER }}
           key: ${{ secrets.SERVER_SSH_KEY }}
+          envs: IMAGE_TAG,POSTGRES_PASSWORD,JWT_SECRET,GHCR_TOKEN,GITHUB_ACTOR
           script: |
             set -e
 
+            mkdir -p /opt/sync
+
+            # Записываем .env из GitHub Secrets — не храним секреты на сервере вручную
+            cat > /opt/sync/.env <<EOF
+            IMAGE=${IMAGE_TAG}
+            POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+            JWT_SECRET=${JWT_SECRET}
+            EOF
+
             cd /opt/sync
 
-            # Прописываем тег нового образа в .env
-            sed -i "s|^IMAGE=.*|IMAGE=${{ env.IMAGE }}:${{ needs.build-and-push.outputs.image_tag }}|" .env
-
-            # Логинимся в ghcr.io (токен из секрета)
-            echo "${{ secrets.GHCR_TOKEN }}" | docker login ghcr.io -u ${{ github.actor }} --password-stdin
+            # Логинимся в ghcr.io
+            echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
             # Скачиваем новый образ
             docker compose -f docker-compose.prod.yml pull api chat_worker
