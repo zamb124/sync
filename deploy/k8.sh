@@ -1,4 +1,6 @@
 #!/usr/bin/env bash
+# Полная настройка сервера: MicroK8s + Docker Engine + Portainer Agent + /opt/sync
+# Запускается локально, все команды выполняются на сервере по SSH.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,35 +18,31 @@ require_cmd() {
   fi
 }
 
-run_remote_via_ssh() {
-  require_cmd jq
-  require_cmd ssh
+require_cmd jq
+require_cmd ssh
 
-  if [[ ! -f "${CONF_LOCAL_JSON}" ]]; then
-    echo "Не найден файл конфигурации: ${CONF_LOCAL_JSON}" >&2
-    exit 1
-  fi
+if [[ ! -f "${CONF_LOCAL_JSON}" ]]; then
+  echo "Не найден файл конфигурации: ${CONF_LOCAL_JSON}" >&2
+  exit 1
+fi
 
-  local ip login ssh_port
-  ip="$(jq -er '.selectel.ip' "${CONF_LOCAL_JSON}")"
-  login="$(jq -er '.selectel.login' "${CONF_LOCAL_JSON}")"
-  ssh_port="$(jq -r '.selectel.ssh_port // "22"' "${CONF_LOCAL_JSON}")"
+ip="$(jq -er '.selectel.ip' "${CONF_LOCAL_JSON}")"
+login="$(jq -er '.selectel.login' "${CONF_LOCAL_JSON}")"
+ssh_port="$(jq -r '.selectel.ssh_port // "22"' "${CONF_LOCAL_JSON}")"
 
-  # Сбрасываем старый ключ хоста — актуально после переустановки сервера.
-  ssh-keygen -R "${ip}" 2>/dev/null || true
-  ssh-keygen -R "[${ip}]:${ssh_port}" 2>/dev/null || true
+# Сбрасываем старый ключ хоста — актуально после переустановки сервера.
+ssh-keygen -R "${ip}" 2>/dev/null || true
+ssh-keygen -R "[${ip}]:${ssh_port}" 2>/dev/null || true
 
-  log "Подключаюсь к серверу: ${login}@${ip}:${ssh_port}"
+log "Подключаюсь к серверу: ${login}@${ip}:${ssh_port}"
 
-  # SSH-ключ уже добавлен на сервер через панель Selectel.
-  # Подключаемся только по ключу, без пароля.
-  ssh \
-    -o StrictHostKeyChecking=accept-new \
-    -o BatchMode=yes \
-    -o ConnectTimeout=10 \
-    -p "${ssh_port}" \
-    "${login}@${ip}" \
-    "bash -s" <<'REMOTE_SCRIPT'
+ssh \
+  -o StrictHostKeyChecking=accept-new \
+  -o BatchMode=yes \
+  -o ConnectTimeout=10 \
+  -p "${ssh_port}" \
+  "${login}@${ip}" \
+  "bash -s" <<'REMOTE_SCRIPT'
 
 set -euo pipefail
 
@@ -57,8 +55,12 @@ if [[ "$(id -u)" -ne 0 ]]; then
   SUDO="sudo"
 fi
 
+CURRENT_USER="$(id -un)"
 MICROK8S_CHANNEL="${MICROK8S_CHANNEL:-1.29/stable}"
 
+# ────────────────────────────────────────
+# MicroK8s
+# ────────────────────────────────────────
 log "Установка MicroK8s (channel: ${MICROK8S_CHANNEL})"
 if ! command -v microk8s >/dev/null 2>&1; then
   ${SUDO} snap install microk8s --classic --channel="${MICROK8S_CHANNEL}"
@@ -69,7 +71,6 @@ fi
 log "Ожидание готовности кластера"
 ${SUDO} microk8s status --wait-ready
 
-# Включает addon только если он ещё не активен.
 enable_addon() {
   local addon="$1"
   if ${SUDO} microk8s status --format short 2>/dev/null | grep -q "^enabled:.*\b${addon}\b"; then
@@ -80,10 +81,8 @@ enable_addon() {
   fi
 }
 
-log "Включение community-репозитория addon-ов"
+log "Включение addon-ов MicroK8s"
 enable_addon community
-
-log "Включение базовых addon-ов"
 enable_addon dns
 enable_addon hostpath-storage
 enable_addon helm
@@ -91,37 +90,95 @@ enable_addon metrics-server
 enable_addon dashboard
 enable_addon portainer
 
-log "Итоговая проверка состояния кластера"
+log "Итоговая проверка кластера"
 ${SUDO} microk8s status --wait-ready
 
+# ────────────────────────────────────────
+# Docker Engine
+# ────────────────────────────────────────
+if command -v docker >/dev/null 2>&1; then
+  log "Docker уже установлен: $(docker --version)"
+else
+  log "Устанавливаем Docker Engine"
+  ${SUDO} apt-get update -qq
+  ${SUDO} apt-get install -y -qq ca-certificates curl gnupg
+  ${SUDO} install -m 0755 -d /etc/apt/keyrings
+  curl -fsSL https://download.docker.com/linux/ubuntu/gpg \
+    | ${SUDO} gpg --dearmor -o /etc/apt/keyrings/docker.gpg
+  ${SUDO} chmod a+r /etc/apt/keyrings/docker.gpg
+  echo \
+    "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] \
+     https://download.docker.com/linux/ubuntu \
+     $(. /etc/os-release && echo "$VERSION_CODENAME") stable" \
+    | ${SUDO} tee /etc/apt/sources.list.d/docker.list > /dev/null
+  ${SUDO} apt-get update -qq
+  ${SUDO} apt-get install -y -qq docker-ce docker-ce-cli containerd.io docker-compose-plugin
+  log "Docker установлен: $(docker --version)"
+fi
+
+if ! id -nG "${CURRENT_USER}" | grep -qw docker; then
+  ${SUDO} usermod -aG docker "${CURRENT_USER}"
+  log "Пользователь ${CURRENT_USER} добавлен в группу docker"
+fi
+
+# ────────────────────────────────────────
+# Portainer Agent (для управления Docker из Portainer UI)
+# ────────────────────────────────────────
+if docker ps -a --format '{{.Names}}' | grep -q '^portainer_agent$'; then
+  log "Portainer Agent уже запущен, пропускаем"
+else
+  log "Запускаем Portainer Agent"
+  docker run -d \
+    --name portainer_agent \
+    --restart unless-stopped \
+    -p 9001:9001 \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v /var/lib/docker/volumes:/var/lib/docker/volumes \
+    portainer/agent:latest
+fi
+
+# ────────────────────────────────────────
+# Рабочая директория /opt/sync
+# ────────────────────────────────────────
+log "Создаём /opt/sync"
+${SUDO} mkdir -p /opt/sync
+${SUDO} chown "${CURRENT_USER}:${CURRENT_USER}" /opt/sync
+
+if [[ ! -f /opt/sync/.env ]]; then
+  log "Создаём шаблон /opt/sync/.env"
+  printf 'IMAGE=ghcr.io/<GITHUB_USERNAME>/sync:latest\nPOSTGRES_PASSWORD=\nJWT_SECRET=\n' \
+    > /opt/sync/.env
+  log "Заполните /opt/sync/.env перед первым деплоем"
+else
+  log "/opt/sync/.env уже существует, не перезаписываем"
+fi
+
+# ────────────────────────────────────────
+# Итог
+# ────────────────────────────────────────
 NODE_IP="$(ip -4 addr show scope global 2>/dev/null \
   | awk '/inet / {print $2}' \
   | awk -F/ '{print $1}' \
   | head -n 1 || true)"
 
-if [[ -z "${NODE_IP}" ]]; then
-  NODE_IP="IP_СЕРВЕРА"
-fi
+[[ -z "${NODE_IP}" ]] && NODE_IP="IP_СЕРВЕРА"
 
 echo
 echo "======================================"
-echo " Установка завершена"
+echo " Настройка завершена"
 echo "======================================"
 echo
-echo "Portainer (веб-панель управления):"
+echo "Portainer (K8s панель):"
 echo "  http://${NODE_IP}:30777"
-echo "  https://${NODE_IP}:30779"
-echo "  При первом заходе создайте пользователя и пароль."
 echo
-echo "Kubernetes Dashboard:"
-echo "  Токен для входа:"
-echo "    ${SUDO} microk8s kubectl create token default"
-echo "  Port-forward (выполнить на сервере, держать открытым):"
-echo "    ${SUDO} microk8s kubectl port-forward -n kube-system service/kubernetes-dashboard 10443:443"
-echo "  Открыть в браузере: https://127.0.0.1:10443"
+echo "Portainer Agent (Docker):"
+echo "  Добавь окружение в Portainer: ${NODE_IP}:9001"
+echo "  Home → Add environment → Docker Standalone → Agent"
+echo
+echo "Приложение после деплоя:"
+echo "  http://${NODE_IP}:8000"
 echo "======================================"
 
 REMOTE_SCRIPT
-}
 
-run_remote_via_ssh
+log "Сервер готов."
