@@ -1,53 +1,116 @@
-# Deploy
+# Деплой Sync
 
-Цель: чтобы после обновлений в GitHub сервер сам подхватывал изменения и разворачивал сервисы на своей инфраструктуре “по кнопке”.
+## Принцип
 
-## Важно про доступы
-- Никогда не коммитьте в репозиторий пароли/секреты (в т.ч. `root` пароль).
-- Для деплоя используйте SSH-ключи и секреты CI/CD.
+GitHub Actions собирает Docker-образ и пушит его в `ghcr.io`.  
+Потом по SSH заходит на сервер и перезапускает `api` и `chat_worker` с новым образом.
 
-## Что нужно выбрать (1 из 2)
+```
+git push → GitHub Actions → ghcr.io → SSH → docker compose up -d
+```
 
-1. `k8s + ArgoCD`
-   - Публикуете образы/артефакты в реестр.
-   - В отдельном репозитории держите манифесты (GitOps).
-   - Деплой выполняется вручную кнопкой в ArgoCD (или по автоматическому sync при пушах).
+---
 
-2. `docker-compose + Portainer`
-   - Описываете сервисы в `docker-compose.yml` (и `.env`/конфиги).
-   - Деплой выполняется вручную кнопкой в Portainer (stack deploy), либо по webhook.
+## Структура файлов
 
-Выберите режим и оставьте его в этом файле ниже.
+| Файл | Назначение |
+|------|-----------|
+| `Dockerfile` | Мульти-стейдж: Node (фронт) → Python (API + worker) |
+| `docker-compose.prod.yml` | Все сервисы: postgres, redis, api, chat_worker, migrate |
+| `.github/workflows/deploy.yml` | CI/CD пайплайн |
+| `deploy/setup-docker.sh` | Одноразовая подготовка сервера (Docker Engine + /opt/sync) |
+| `deploy/k8.sh` | Установка MicroK8s + Portainer (веб-панель K8s) |
 
-### Режим деплоя
-ТЕКУЩИЙ РЕЖИМ: `TODO`
+---
 
-## Структура GitHub (минимум)
+## Первоначальная настройка (один раз)
 
-Нужно определить, где находятся:
-- исходники сервисов (ваши репозитории)
-- шаблоны/настройки деплоя (k8s манифесты или docker-compose)
-- (опционально) репозиторий только для GitOps (рекомендовано для ArgoCD)
+### 1. Подготовить сервер
 
-## Настройка “по кнопке”
+```bash
+bash deploy/setup-docker.sh
+```
 
-В терминах UI это будет одно из:
-- кнопка `Sync`/`Manual sync` в ArgoCD
-- кнопка `Deploy the stack` в Portainer
-- кнопка/триггер `workflow_dispatch` в GitHub Actions (если деплой через CI)
+Устанавливает Docker Engine на сервер и создаёт `/opt/sync/.env`.
 
-## Секреты и переменные
+### 2. Заполнить .env на сервере
 
-Требования:
-- секреты должны храниться либо в:
-  - Kubernetes (`Secret`, лучше Sealed Secrets), либо
-  - Portainer/окружении Docker (secret management зависит от выбранного способа)
-- ключи/токены не должны попадать в репозитории
+```bash
+ssh root@84.38.184.105 'nano /opt/sync/.env'
+```
 
-## Что будет в этом проекте
+```env
+IMAGE=ghcr.io/<ваш-github-username>/sync:latest
+POSTGRES_PASSWORD=<сгенерируйте-сильный-пароль>
+JWT_SECRET=<сгенерируйте-64-символьный-hex>
+```
 
-После выбора режима здесь появятся конкретные ссылки и шаги:
-- где лежат конфиги деплоя
-- как собирать и пушить образы
-- как запускать деплой вручную
+Сгенерировать секреты:
+```bash
+openssl rand -hex 32   # для пароля
+openssl rand -hex 32   # для JWT_SECRET
+```
 
+### 3. Первый запуск (postgres + redis)
+
+На сервере:
+```bash
+cd /opt/sync
+docker compose -f docker-compose.prod.yml up -d postgres redis
+# Подождать ~5 секунд, потом миграции:
+docker compose -f docker-compose.prod.yml run --rm migrate
+docker compose -f docker-compose.prod.yml up -d
+```
+
+### 4. Добавить SSH-ключ для GitHub Actions
+
+Сгенерировать выделенную пару ключей (локально):
+```bash
+ssh-keygen -t ed25519 -C "github-actions" -f ~/.ssh/sync_deploy
+```
+
+Добавить публичный ключ на сервер:
+```bash
+ssh-copy-id -i ~/.ssh/sync_deploy.pub root@84.38.184.105
+```
+
+### 5. Добавить секреты в GitHub
+
+Идёте в GitHub → репозиторий → Settings → Secrets and variables → Actions:
+
+| Секрет | Значение |
+|--------|---------|
+| `SERVER_HOST` | `84.38.184.105` |
+| `SERVER_USER` | `root` |
+| `SERVER_SSH_KEY` | содержимое `~/.ssh/sync_deploy` (приватный ключ) |
+| `GHCR_TOKEN` | Personal Access Token с правом `read:packages` |
+
+---
+
+## Как работает деплой
+
+При каждом `git push` в `main`:
+
+1. GitHub Actions собирает Docker-образ с тегом `sha-<commit>` и `latest`
+2. Пушит в `ghcr.io/<username>/sync`
+3. Копирует `docker-compose.prod.yml` на сервер в `/opt/sync/`
+4. По SSH: обновляет `IMAGE=` в `.env`, делает `docker compose pull`, прогоняет миграции, рестартует `api` и `chat_worker`
+
+Postgres и Redis при этом **не перезапускаются**.
+
+---
+
+## Ручной деплой (без GitHub Actions)
+
+```bash
+# Собрать и запушить образ
+docker build -t ghcr.io/<username>/sync:latest .
+docker push ghcr.io/<username>/sync:latest
+
+# На сервере
+ssh root@84.38.184.105
+cd /opt/sync
+docker compose -f docker-compose.prod.yml pull api chat_worker
+docker compose -f docker-compose.prod.yml run --rm migrate
+docker compose -f docker-compose.prod.yml up -d --no-deps api chat_worker
+```

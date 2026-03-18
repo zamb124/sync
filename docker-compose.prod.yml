@@ -1,0 +1,92 @@
+version: "3.9"
+
+# Переменные задаются через .env-файл на сервере (никогда не коммитится в Git).
+# Пример содержимого .env:
+#   POSTGRES_PASSWORD=<strong-password>
+#   JWT_SECRET=<random-64-char-string>
+#   IMAGE=ghcr.io/<your-github-username>/sync:latest
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sync_user
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+      POSTGRES_DB: sync_db
+    volumes:
+      - sync_pg_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sync_user -d sync_db"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - sync_redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    image: ${IMAGE}
+    restart: unless-stopped
+    command: >
+      uv run uvicorn apps.api.main:app
+      --host 0.0.0.0 --port 8000
+      --workers 2
+    ports:
+      - "8000:8000"
+    environment:
+      API__DATABASE__URL: postgresql://sync_user:${POSTGRES_PASSWORD}@postgres:5432/sync_db
+      API__DATABASE__REDIS_URL: redis://redis:6379/0
+      TASKS__BROKER_URL: redis://redis:6379/1
+      TASKS__RESULT_BACKEND: redis://redis:6379/2
+      AUTH__JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+  migrate:
+    image: ${IMAGE}
+    restart: "no"
+    command: >
+      uv run alembic -c apps/api/alembic.ini upgrade head
+    environment:
+      API__DATABASE__URL: postgresql://sync_user:${POSTGRES_PASSWORD}@postgres:5432/sync_db
+      AUTH__JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+
+  chat_worker:
+    image: ${IMAGE}
+    restart: unless-stopped
+    command: >
+      uv run taskiq worker
+      apps.api.src.realtime.broker:broker
+      apps.api.src.realtime.tasks
+      --workers 2 --log-level INFO
+    environment:
+      API__DATABASE__URL: postgresql://sync_user:${POSTGRES_PASSWORD}@postgres:5432/sync_db
+      API__DATABASE__REDIS_URL: redis://redis:6379/0
+      TASKS__BROKER_URL: redis://redis:6379/1
+      TASKS__RESULT_BACKEND: redis://redis:6379/2
+      AUTH__JWT_SECRET: ${JWT_SECRET}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+
+volumes:
+  sync_pg_data:
+  sync_redis_data:
