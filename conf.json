@@ -1,0 +1,46 @@
+{
+  "api": {
+    "database": {
+      "url": "",
+      "redis_url": ""
+    }
+  },
+  "tasks": {
+    "broker_url": "",
+    "result_backend": ""
+  },
+  "auth": {
+    "jwt_algorithm": "HS256",
+    "permissions_enabled": true
+  },
+  "server": {
+    "host": "0.0.0.0",
+    "port": 8000,
+    "debug": true,
+    "name": "sync",
+    "cors_origins": ["*"],
+    "default_tenant_id": "default"
+  },
+  "logging": {
+    "level": "INFO",
+    "log_dir": "logs",
+    "max_bytes": 10485760,
+    "backup_count": 5,
+    "truncate_limit": 2000
+  },
+  "tracing": {
+    "enabled": false,
+    "postgres_enabled": false,
+    "tempo_enabled": false,
+    "tempo_endpoint": "http://localhost:4317",
+    "sampling_rate": 1.0,
+    "service_name": "sync",
+    "retention_days": 30,
+    "max_attributes_per_span": 128,
+    "max_events_per_span": 128,
+    "trace_state_snapshots": true,
+    "trace_llm_response": true,
+    "log_text_snippets": true
+  }
+}
+

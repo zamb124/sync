@@ -1,0 +1,18 @@
+{
+  "api": {
+    "database": {
+      "url": "postgresql://sync_user:sync_admin@localhost:5435/sync_db",
+      "redis_url": "redis://localhost:6381/0"
+    }
+  },
+  "tasks": {
+    "broker_url": "redis://localhost:6381/1",
+    "result_backend": "redis://localhost:6381/2"
+  },
+  "auth": {
+    "jwt_secret": "dev-only-change-me-in-production",
+    "session_secret": "dev-only-session-secret-change-me",
+    "admin_api_key": "dev-admin-key-change-me"
+  }
+}
+

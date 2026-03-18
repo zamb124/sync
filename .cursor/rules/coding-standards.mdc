@@ -1,0 +1,176 @@
+---
+alwaysApply: true
+---
+
+
+# Стандарты кодирования
+
+ИСПОЛЬЗУЙ context7 ВСЕГДА чтобы узнать как работают библиотеки.
+
+## Строгая архитектура — Zero-Guess
+
+Никакой обратной совместимости, никаких фолбеков, никаких угадываний. Логика строгая и прозрачная.
+
+## Запрещённые паттерны (КРИТИЧЕСКИ ВАЖНО)
+
+### 1. Фолбеки
+
+Если значение отсутствует — `raise`. Не подставляй, не угадывай.
+
+```python
+# ЗАПРЕЩЕНО
+self.base_url = base_url or "https://api.openai.com/v1"
+self.prompt = prompt or cfg.get("prompt", "")
+agent_id = agent_id or "test-agent"
+tags = tags or []  # если модель уже задаёт default
+
+# ПРАВИЛЬНО
+if not base_url:
+    raise ValueError("base_url is required")
+self.base_url = base_url
+```
+
+Допустимые дефолты — только в Pydantic моделях (`tags: List[str] = []`). В рантайм-коде повторять `or []` / `or ""` на поле модели запрещено.
+
+### 2. Локальные импорты
+
+Все импорты — в начале файла. Единственное исключение — DI контейнер (`apps/agents/src/container.py`).
+
+```python
+# ЗАПРЕЩЕНО
+def my_func():
+    from apps.agents.src.tools import finish  # локальный импорт
+```
+
+### 3. try/except с проглатыванием ошибок
+
+```python
+# ЗАПРЕЩЕНО
+try:
+    result = await redis.get(key)
+except Exception:
+    pass  # скрыли ошибку
+
+# ЗАПРЕЩЕНО
+try:
+    settings = get_settings()
+    return settings.tasks.broker_url
+except Exception:
+    return os.environ.get("TASKS__BROKER_URL", "redis://localhost:6379/0")
+
+# ПРАВИЛЬНО — пусть падает
+result = await redis.get(key)
+```
+
+`except Exception: pass` и `except: pass` — строго запрещены. Ловить только конкретные типы, только когда можешь корректно обработать. Redis/S3/Vault недоступен — система падает.
+
+### 4. getattr с дефолтами вместо прямого доступа
+
+```python
+# ЗАПРЕЩЕНО — поле hidden уже в модели
+getattr(agent, 'hidden', False)
+
+# ПРАВИЛЬНО
+agent.hidden
+```
+
+Если атрибут должен быть — обращайся напрямую. Если его может не быть — это баг в архитектуре, не маскируй через `getattr`.
+
+### 5. Дублирование dict vs объект
+
+Для `Edge` всегда используй `Edge.normalize(edge)`, затем обращайся по `.from_node` / `.to_node`. Не пиши `edge.get("from") if isinstance(edge, dict) else edge.from_node`.
+
+Для извлечения групп пользователя — `extract_user_groups(user)` из `core.auth.permissions`. Не дублируй `user.get("grps") or user.get("groups")`.
+
+### 6. Хардкоженные значения в рантайме
+
+VIN, URL, промпты, agent_id — всё из конфигурации. Если нет — `raise ValueError`.
+
+## Stream-First
+
+LLM вызывается ТОЛЬКО через `.stream()`. Синхронных методов НЕТ.
+
+```python
+async for event in llm.stream(messages, tools, task_id, context_id):
+    yield event
+```
+
+### 7 ТЕСТЫ
+
+ТЕСТЫ ЗАПУСКАЮТСЯ ЧЕРЕЗ pytest и UV!
+
+## A2A типы
+
+Все типы из `a2a-sdk`. Свои типы для сообщений, событий, задач не создаём.
+
+## Импорты
+
+- Все импорты в начале файла (локальные — только в `container.py`)
+- `from core.logging import get_logger` (не `import logging`)
+- Сначала core, потом apps
+
+## Core vs Apps
+
+- `core/` — базовые модули (config, db, clients, logging, auth, broker)
+- `apps/api/` — FastAPI-сервис API (мастер-данные, чат-эндпоинты, WebSocket, задачи)
+
+## Обработка ошибок
+
+- `try/except: pass` — запрещено
+- `except Exception` с return/continue — запрещено (кроме middleware уведомлений об ошибках)
+- Исключения пробрасываются наверх
+- Лучше явная ошибка, чем скрытое неверное поведение
+- Redis / S3 / Vault не работает — система падает (`raise`)
+
+Единственное исключение — `AgentInterrupt`:
+```python
+try:
+    result = await tool.run(args, state)
+except AgentInterrupt as e:
+    raise
+```
+
+## Изоляция агентов
+
+Агент — полная изолированная конструкция. Конфиг должен быть самодостаточным. Никаких внешних дефолтов.
+
+## Асинхронность
+
+- Все tools — `async def`
+- `LLMClient.stream()` — async generator
+- `EventEmitter.emit*()` — async
+
+## Тесты
+
+- Моки не используются для инфраструктуры (PostgreSQL, Redis, конфиги).
+- Глобальные фикстуры объявляются в `tests/conftest.py` (например, `settings` для `CoreSettings`/`ApiSettings`).
+
+## Минимализм
+
+- Не добавлять фичи без запроса
+- Не проектировать "на будущее"
+- Минимум кода
+- Легаси и неиспользуемый код удаляется сразу, без обратной совместимости
+
+## Логирование
+
+```python
+from core.logging import get_logger
+logger = get_logger(__name__)
+```
+
+## Запрещённые практики (итого)
+
+- `or "default"` / `or []` / `or ""` на значениях которые должны быть в конфиге
+- `getattr(obj, "field", fallback)` на полях которые определены в модели
+- `try: ... except Exception: pass`
+- `try: ... except: pass`
+- `except Exception` с return/fallback вместо raise
+- Локальные импорты (кроме `container.py`)
+- Дублирование логики вместо единой утилиты
+- `isinstance(edge, dict)` проверки — используй `Edge.normalize()`
+- Хардкоженные URL, VIN, промпты, agent_id в рантайм-коде
+- Альясы, обёртки, патчи ради упрощения
+- `import logging` напрямую
+
+Нарушение этих правил делает систему непрозрачной и ненадёжной.

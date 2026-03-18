@@ -1,0 +1,252 @@
+---
+alwaysApply: true
+---
+# Промпт для начала диалога с кодинг-агентом
+
+**Правила проекта:** `.cursor/rules/*.mdc`
+
+**РАЗГОВАРИВАЙ НА РУССКОМ **
+
+## Контекст проекта
+
+**Sync** — платформа инженерного чата с богатыми сообщениями и интеграцией с GitLab.
+
+**Стек:**
+- **Backend:** Python 3.14, FastAPI, Pydantic v2, async/await
+- **БД:** PostgreSQL (мастер-данные, чат), Redis (кэш, брокер задач)
+- **TaskIQ:** Очередь задач (taskiq + taskiq-redis)
+
+Базовые настройки описаны через `CoreSettings` в `core.config`, а каждый сервис в `apps/*` имеет свои `Settings`, наследующиеся от `CoreSettings` (например, `ApiSettings` в `apps/api/config/config.py`), и собственный `conf.json` в папке сервиса при необходимости.
+
+## Архитектурные принципы (НЕЗЫБЛЕМЫЕ)
+
+### 1. Explicit over Implicit (Zero-Guess)
+- **Никаких фолбеков:** `or "default"`, `or []`, `getattr(obj, "field", fallback)` — **ЗАПРЕЩЕНО**
+- **Никаких try/except с проглатыванием:** `except Exception: pass` — **ЗАПРЕЩЕНО**
+- **Нет значения в конфиге?** → `raise ValueError`, не угадывай
+- **Лозунг:** "Better to crash than to guess"
+
+### 2. DB-First
+- Всё хранится в БД: агенты, ноды, tools, skills, variables
+- Код — просто исполнитель инструкций из БД
+- Обновление логики → через обновление БД, не деплой кода
+
+### 3. Stream-First
+- **LLM вызывается ТОЛЬКО через `.stream()`**
+- Все события через **Redis Pub/Sub** (a2a-sdk типы)
+- Синхронных методов НЕТ
+
+### 4. A2A Protocol
+- **ВСЕ типы из `a2a-sdk`**: `Task`, `Message`, `TaskStatusUpdateEvent`, `TaskArtifactUpdateEvent`
+- Свои типы не создаём
+
+### 5. Permissions
+- Группы пользователя: ТОЛЬКО `grps` (не `groups`)
+- Конфигурация permissions: ТОЛЬКО `permissions` (не `permission`)
+- Извлечение групп: ТОЛЬКО `extract_user_groups(user)`
+- Пустой список permissions = доступ для всех (не admin!)
+
+📄 **Permissions:** `.cursor/rules/permissions.mdc`
+
+## Стандарты кода
+
+### ⚠️ ИМПОРТЫ ВНУТРИ ФУНКЦИЙ — СТРОГО ЗАПРЕЩЕНЫ ⚠️
+
+**ИМПОРТЫ ВНУТРИ ФУНКЦИЙ/МЕТОДОВ — ЭТО ОЧЕНЬ ПЛОХО!**
+
+```python
+# ❌ КАТЕГОРИЧЕСКИ НЕЛЬЗЯ:
+def my_function():
+    from some.module import something  # ЗАПРЕЩЕНО!
+    ...
+
+async def handler():
+    import requests  # ЗАПРЕЩЕНО!
+    ...
+```
+
+**ПОЧЕМУ ЭТО ОЧЕНЬ ПЛОХО:**
+- Сильно замедляет выполнение (импорт выполняется каждый вызов!)
+- Скрывает реальные зависимости функции
+- Усложняет тестирование и мокирование
+- Нарушает принцип явных зависимостей
+- Затрудняет статический анализ и linting
+- Может вызывать circular import проблемы
+
+**✅ ВСЕ ИМПОРТЫ — ТОЛЬКО НА ВЕРХНЕМ УРОВНЕ МОДУЛЯ:**
+```python
+# ✅ ПРАВИЛЬНО:
+from some.module import something
+
+async def handler():
+    # используем уже импортированное
+    ...
+```
+
+---
+
+### Python
+```python
+# Импорты: сначала core, потом apps
+from core.config import CoreSettings
+from apps.api.config import ApiSettings
+```
+
+### Запрещённые паттерны
+```python
+# ❌ ЗАПРЕЩЕНО
+self.base_url = base_url or "https://api.openai.com/v1"
+user_groups = user.get("grps", []) or user.get("groups", [])
+try:
+    result = await redis.get(key)
+except Exception:
+    pass
+getattr(agent, 'hidden', False)
+
+# ✅ ПРАВИЛЬНО
+if not base_url:
+    raise ValueError("base_url is required")
+self.base_url = base_url
+
+user_groups = extract_user_groups(user)
+
+result = await redis.get(key)  # Пусть падает
+
+agent.hidden  # Поле в модели
+```
+
+📄 **Стандарты:** `.cursor/rules/coding-standards.mdc`
+
+### Frontend (JavaScript)
+```javascript
+// Все компоненты наследуются от BaseComponent
+import { BaseComponent } from '../core/BaseComponent.js';
+
+export class MyComponent extends BaseComponent {
+    async init() {
+        const html = await this.render('template.html', { data });
+        this.api.get('/path');  // API через this.api
+        this.success('OK');     // Уведомления
+    }
+}
+
+// Модалки наследуются от BaseModal/FormModal
+// API через this.api (автоматический refresh token)
+// Шаблоны через TemplateLoader (Mustache)
+```
+
+📄 **Frontend:** `.cursor/rules/frontend.mdc`
+
+## Тестирование
+
+📄 **Полные правила:** `.cursor/rules/testing.mdc`
+
+```bash
+# Запуск тестов
+make test                    # Через make
+uv run pytest tests/         # Все тесты
+uv run pytest tests/path/test.py -v  # Конкретный файл
+```
+
+**Правила:**
+- **Мок только MockLLM**, остальное реальное (PostgreSQL, Redis)
+- **Всегда используй `unique_id`** для уникальных идентификаторов
+- **ЗАПРЕЩЕНЫ фикстуры с `autouse=True`** (кроме `reset_mock_llm`)
+- Тесты должны явно указывать все зависимости в сигнатуре
+
+```python
+@pytest.mark.asyncio
+async def test_example(self, app, mock_llm_with_queue, unique_id):
+    context_id = f"test-{unique_id}"
+    session_id = f"agent_id:{context_id}"
+    ...
+```
+
+## Make команды
+
+```bash
+make dev   # Запуск dev-окружения (PostgreSQL + Redis через docker-compose.dev.yml)
+make test  # Запуск pytest через uv
+make api   # Запуск сервиса apps.api.main:app через uvicorn
+```
+
+## Структура проекта
+
+```
+core/                          # Базовые модули (config, db, clients, logging, auth, broker)
+apps/
+├── api/                       # FastAPI-сервис API
+│   ├── config/                # Сервисные настройки (ApiSettings, conf.json сервиса)
+│   └── main.py                # Точка входа FastAPI-приложения
+tests/                         # Тесты (tests/core, tests/conftest.py)
+```
+
+📄 **Tools:** `.cursor/rules/tools.mdc`  
+📄 **Evaluation:** `.cursor/rules/evaluation.mdc`  
+📄 **Vault:** `.cursor/rules/vault.mdc`  
+📄 **Integrations:** `.cursor/rules/integrations.mdc`  
+📄 **Agent Config:** `.cursor/rules/flow-config.mdc`
+
+## Документация
+
+- **Правила проекта:** `.cursor/rules/*.mdc`
+- **README (в будущем):** архитектура, быстрый старт, API инженерного чата
+
+## Важные соглашения
+
+- **Язык комментариев:** ТОЛЬКО русский
+- **Логирование:** `from core.logging import get_logger`
+- **DI:** `get_container()` (ленивая загрузка)
+- **Context:** `get_context()` (user, tenant, metadata)
+- **Variables:** `@var:key` резолвятся из БД/Vault
+- **State mapping:** `@state:path` для извлечения из state
+
+## Token Limits
+
+📄 **Полные правила:** `.cursor/rules/token-limits.mdc`
+
+- Проверка лимитов: **ДО** вызова LLM (если `enabled: true`)
+- Запись использования: **В finally блоке** после stream
+- Usage из LLM: ожидание `usage` chunk после `finish_reason`
+- Типы лимитов: ТОЛЬКО `"user"`, `"agent"`, `"user_agent"`
+- Периоды: ТОЛЬКО `"day"`, `"week"`, `"month"`, `"year"`
+
+## Frontend: Canvas стили
+
+📄 **Полные правила:** `.cursor/rules/canvas-styles.mdc`
+
+**КРИТИЧЕСКИ ВАЖНО:** Дублировать стили для обеих тем!
+
+```css
+/* Темная тема */
+.drawflow .drawflow-node.node-running {
+    border: 3px solid #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), 0 0 20px rgba(59, 130, 246, 0.8) !important;
+}
+
+/* Светлая тема - ОБЯЗАТЕЛЬНО! */
+[data-theme="light"] .drawflow .drawflow-node.node-running {
+    border: 3px solid #3b82f6 !important;
+    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), 0 0 20px rgba(59, 130, 246, 0.5) !important;
+}
+```
+
+**Правила:**
+- **Только CSS классы**, никаких inline стилей
+- **!important** для всех правил
+- **Синхронизировать** `drawflow-injector.js` + `drawflow.css`
+
+## Ссылки
+
+- **A2A SDK:** используй `context7` для документации
+- **Конфигурация:** `conf.json` + `conf.local.json` (локальные переопределения)
+- **API ключи:** в `conf.local.json` (не коммитить)
+- **Permissions:** `ADMIN_GROUP`, `extract_user_groups()` — только из `core.auth.permissions`
+
+---
+
+**Перед началом работы:**
+1. Изучи `.cursor/rules/*.mdc` для деталей
+2. Проверь `docs/` для полной документации
+3. Запусти `make dev` для локальной разработки
+4. Убедись что тесты проходят: `make test`

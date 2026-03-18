@@ -1,0 +1,28 @@
+version: "3.9"
+
+services:
+  postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sync_user
+      POSTGRES_PASSWORD: sync_admin
+      POSTGRES_DB: sync_db
+    ports:
+      - "5435:5432"
+    volumes:
+      - sync_pg_data:/var/lib/postgresql/data
+
+  redis:
+    image: redis:7
+    restart: unless-stopped
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "6381:6379"
+    volumes:
+      - sync_redis_data:/data
+
+volumes:
+  sync_pg_data:
+  sync_redis_data:
+
