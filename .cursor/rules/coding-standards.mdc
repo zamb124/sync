@@ -2,146 +2,149 @@
 alwaysApply: true
 ---
 
+# Стандарты кодирования Sync
 
-# Стандарты кодирования
+Используй Context7 для уточнения API библиотек.
 
-ИСПОЛЬЗУЙ context7 ВСЕГДА чтобы узнать как работают библиотеки.
+## Zero-Guess (главный принцип)
 
-## Строгая архитектура — Zero-Guess
+**"Better to crash than to guess."**
 
-Никакой обратной совместимости, никаких фолбеков, никаких угадываний. Логика строгая и прозрачная.
+Нет значения → `raise`. Не подставлять, не угадывать, не маскировать.
 
-## Запрещённые паттерны (КРИТИЧЕСКИ ВАЖНО)
-
-### 1. Фолбеки
-
-Если значение отсутствует — `raise`. Не подставляй, не угадывай.
+### Запрещено
 
 ```python
-# ЗАПРЕЩЕНО
-self.base_url = base_url or "https://api.openai.com/v1"
-self.prompt = prompt or cfg.get("prompt", "")
-agent_id = agent_id or "test-agent"
-tags = tags or []  # если модель уже задаёт default
+# Фолбеки
+x = value or "default"
+x = value or []
+x = getattr(obj, "field", fallback)
 
-# ПРАВИЛЬНО
-if not base_url:
-    raise ValueError("base_url is required")
-self.base_url = base_url
-```
+# Проглатывание ошибок
+try: ...
+except Exception: pass
 
-Допустимые дефолты — только в Pydantic моделях (`tags: List[str] = []`). В рантайм-коде повторять `or []` / `or ""` на поле модели запрещено.
+try: ...
+except Exception:
+    return fallback_value
 
-### 2. Локальные импорты
-
-Все импорты — в начале файла.
-
-```python
-# ЗАПРЕЩЕНО
+# Локальные импорты
 def my_func():
-    from some.module import something  # локальный импорт
+    from some.module import something
 ```
 
-### 3. try/except с проглатыванием ошибок
+### Правильно
 
 ```python
-# ЗАПРЕЩЕНО
-try:
-    result = await redis.get(key)
-except Exception:
-    pass  # скрыли ошибку
+# Значение обязательно — падаем
+if not value:
+    raise ValueError("value is required")
 
-# ЗАПРЕЩЕНО
-try:
-    settings = get_settings()
-    return settings.tasks.broker_url
-except Exception:
-    return os.environ.get("TASKS__BROKER_URL", "redis://localhost:6379/0")
+# Поле в модели — обращаемся напрямую
+obj.field
 
-# ПРАВИЛЬНО — пусть падает
+# Инфраструктура недоступна — пусть падает
 result = await redis.get(key)
+
+# Дефолты — только в Pydantic моделях
+class MyConfig(BaseModel):
+    tags: list[str] = []
 ```
 
-`except Exception: pass` и `except: pass` — строго запрещены. Ловить только конкретные типы, только когда можешь корректно обработать. Redis/S3/Vault недоступен — система падает.
+## Границы core ↔ apps (СТРОГО)
 
-### 4. getattr с дефолтами вместо прямого доступа
+### `core/` не знает про `apps/`
 
 ```python
-# ЗАПРЕЩЕНО — поле hidden уже в модели
-getattr(agent, 'hidden', False)
+# ЗАПРЕЩЕНО в core/
+from apps.api.config import ApiSettings
+from apps.api.src.db.repositories import SpaceRepository
 
-# ПРАВИЛЬНО
-agent.hidden
+# ПРАВИЛЬНО в apps/
+from core.config import CoreSettings
+from core.db import CoreRepository, Database
 ```
 
-Если атрибут должен быть — обращайся напрямую. Если его может не быть — это баг в архитектуре, не маскируй через `getattr`.
+### Паттерн наследования
 
-### 5. Дублирование dict vs объект
+```python
+# core/ определяет абстракцию
+class CoreSettings(PydanticBaseSettings): ...
+class CoreRepository(BaseSQLRepository, Generic[T]): ...
 
-Не дублируй логику преобразования/валидации данных. Если есть единая утилита/слой (например, репозиторий) — используй его.
+# apps/ расширяет
+class ApiSettings(CoreSettings):
+    service_name: str = Field(default="api")
+    database: ApiDatabaseConfig
 
-### 6. Хардкоженные значения в рантайме
+class SpaceRepository(CoreRepository[SpaceRead]):
+    model_class = SpaceRead
+    def _table_name(self) -> str:
+        return "spaces"
+```
 
-VIN, URL, промпты, agent_id — всё из конфигурации. Если нет — `raise ValueError`.
+### Куда класть новый код
 
-### 7 ТЕСТЫ
-
-ТЕСТЫ ЗАПУСКАЮТСЯ ЧЕРЕЗ pytest и UV!
+- Переиспользуемый между сервисами → `core/`
+- Клиенты интеграций (HTTP, GitLab) → `core/clients/`
+- Специфичный для одного сервиса → `apps/<service>/`
+- Сомневаешься → `core/`
 
 ## Импорты
 
-- Все импорты в начале файла
-- `from core.logging import get_logger` (не `import logging`)
-- Сначала core, потом apps
-
-## Core vs Apps
-
-- `core/` — базовые модули (config, db, clients, logging, auth, broker)
-- `apps/api/` — FastAPI-сервис API (мастер-данные, чат-эндпоинты, WebSocket, задачи)
+- Все импорты на верхнем уровне модуля. Локальные импорты запрещены.
+- Порядок: stdlib → core → apps → third-party.
+- `from core.logging import get_logger` (не `import logging`).
 
 ## Обработка ошибок
 
-- `try/except: pass` — запрещено
-- `except Exception` с return/continue — запрещено (кроме middleware уведомлений об ошибках)
-- Исключения пробрасываются наверх
-- Лучше явная ошибка, чем скрытое неверное поведение
-- Redis / S3 / Vault не работает — система падает (`raise`)
+- `except Exception: pass` / `except: pass` — запрещено.
+- `except Exception` с `return`/`continue`/fallback — запрещено.
+- Ловить только конкретные типы, когда можешь корректно обработать.
+- Инфраструктура (БД, Redis) недоступна → сервис падает.
+- Сбои на старте — фатальные. Лучше не подняться, чем работать сломанным.
+
+## Типизация
+
+- Все публичные функции/методы — полные аннотации (аргументы + возврат).
+- Явные типы: `dict[str, Any]`, `list[str]` (не голые `dict`/`list`).
+- Доменные модели — Pydantic `BaseModel` или `dataclass`, не сырые словари.
+
+## Конфигурация
+
+- Доступ только через `CoreSettings` / `get_settings()` / `set_settings()`.
+- `get_settings()` не создаёт инстанс. Не инициализировано → `RuntimeError`.
+- Все обязательные поля описаны в Pydantic-моделях (`core/config/models.py`).
+- `conf.json` обязателен. `conf.local.json` опционален.
+- Хардкод URL, секретов, ID в рантайм-коде — запрещён.
+
+## DI-контейнер
+
+- Все зависимости через `Container` (`core/di/container.py`).
+- `build_service_container()` из `core/di/wiring.py` — регистрация DB + репозиториев.
+- В сервисе: `apps.<service>.container.get_container()` / `container.resolve(Type)`.
+- FastAPI `Depends()` — тонкая обёртка для доступа к контейнеру в роутерах.
+
+## Репозитории
+
+- Наследуются от `CoreRepository[T]` (`core/db/base_sql_repository.py`).
+- Конструктор: `Repo(database: Database)`.
+- Обязательно: `model_class = MyPydanticModel`, `_table_name() -> str`.
+- CRUD (`get`, `set`, `list`, `delete`) наследуется из `CoreRepository`.
 
 ## Асинхронность
 
-- Все IO-операции в сервисах — `async def` (FastAPI handlers, репозитории, клиенты).
+- Все IO-операции — `async def` (handlers, репозитории, клиенты).
 
 ## Тесты
 
-- Моки не используются для инфраструктуры (PostgreSQL, Redis, конфиги).
-- Глобальные фикстуры объявляются в `tests/conftest.py` (например, `settings` для `CoreSettings`/`ApiSettings`).
+- Запуск: `make test` или `uv run pytest`.
+- Без моков для инфраструктуры. Реальные контейнеры через docker-compose.
+- Глобальные фикстуры в `tests/conftest.py`.
+- `tests/core/` — unit-тесты. `tests/api/` — интеграционные.
 
 ## Минимализм
 
-- Не добавлять фичи без запроса
-- Не проектировать "на будущее"
-- Минимум кода
-- Легаси и неиспользуемый код удаляется сразу, без обратной совместимости
-
-## Логирование
-
-```python
-from core.logging import get_logger
-logger = get_logger(__name__)
-```
-
-## Запрещённые практики (итого)
-
-- `or "default"` / `or []` / `or ""` на значениях которые должны быть в конфиге
-- `getattr(obj, "field", fallback)` на полях которые определены в модели
-- `try: ... except Exception: pass`
-- `try: ... except: pass`
-- `except Exception` с return/fallback вместо raise
-- Локальные импорты (кроме `container.py`)
-- Дублирование логики вместо единой утилиты
-- `isinstance(edge, dict)` проверки — используй `Edge.normalize()`
-- Хардкоженные URL, VIN, промпты, agent_id в рантайм-коде
-- Альясы, обёртки, патчи ради упрощения
-- `import logging` напрямую
-
-Нарушение этих правил делает систему непрозрачной и ненадёжной.
+- Не добавлять фичи без запроса. Не проектировать «на будущее».
+- Мёртвый код удаляется немедленно (CleanFirst).
+- Минимум обёрток, альясов, патчей.

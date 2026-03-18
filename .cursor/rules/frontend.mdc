@@ -1,95 +1,82 @@
 ---
-alwaysApply: true
+description: "Frontend правила SolidJS: структура компонентов, WebSocket, стили, Zero-Guess на фронте"
+globs:
+  - "apps/api/static/**/*.ts"
+  - "apps/api/static/**/*.tsx"
+  - "apps/api/static/**/*.css"
+  - "apps/api/static/**/*.json"
+  - "apps/api/static/**/*.html"
 ---
 
-# Frontend правила Sync (SolidJS + Vite + Tailwind + Kobalte)
-
-Цель: **строгая, надёжная архитектура UI** для чата. Минимум скрытой магии, предсказуемые зависимости, единые DTO/контракты с API, устойчивый realtime.
-
-## 1) Архитектура: фичи как независимые модули
+# Frontend Sync (SolidJS + Vite + Tailwind + Kobalte)
 
 Frontend живёт в `apps/api/static/src`.
 
-### Обязательная структура
+## Структура
 
 ```
 src/
-  app/                 # роутинг, композиция экранов, провайдеры
-  pages/               # страницы (контейнеры состояния)
-    ChatPage.tsx       # контейнер: state/handlers/compose layout
-    chat/              # компоненты страницы чата
+  app/App.tsx              # роутинг (@solidjs/router)
+  pages/
+    ChatPage.tsx           # контейнер: state, handlers, layout
+    AuthPage.tsx
+    PublicPage.tsx
+    chat/                  # компоненты чата (получают данные через props)
       Sidebar.tsx
       Header.tsx
       ChannelPickerGrid.tsx
       MessageList.tsx
       MessageBubble.tsx
       Composer.tsx
-  shared/              # инфраструктура и общие примитивы (без бизнес-логики)
-    api.ts             # apiFetch + ApiError, всегда Authorization: Bearer
-    auth.ts            # token storage + getCurrentUserId()
-    ws.ts              # createReliableWs: реконнект/backoff/jitter, без хардкода URL
-    dto.ts             # DTO (Space/Channel/Message и др.)
-  styles.css
+  shared/                  # инфраструктура (без бизнес-логики)
+    api.ts                 # apiFetch + ApiError (Authorization: Bearer)
+    auth.ts                # token storage, getCurrentUserId()
+    ws.ts                  # createReliableWs (реконнект, backoff, jitter)
+    dto.ts                 # DTO (Space, Channel, Message и др.)
+  styles.css               # Tailwind base + glass/btn/input компоненты
   main.tsx
 ```
 
-### Жёсткие границы импортов (КРИТИЧНО)
+## Границы импортов
+
 - `shared/*` не импортирует `pages/*`.
-- Компоненты в `pages/chat/*` не ходят в сеть и не держат глобальное состояние: получают данные/коллбеки через props.
+- Компоненты `pages/chat/*` не ходят в сеть, не держат глобальное состояние — только props.
 
-## 2) Zero‑Guess на фронте (как на бэке)
+## Zero-Guess на фронте
 
-- **Запрещены скрытые фолбеки**, которые маскируют отсутствие данных:
-  - `x || "default"` / `x ?? "default"` для обязательных значений из API/контекста.
-  - Если значение обязательно — **бросаем ошибку** (throw) как можно ближе к месту использования.
-- Ошибки API не «глотаем». Если не можем обработать — пробрасываем/показываем UI‑ошибку.
-- Не делаем «тихие» автоматические ретраи/подмены URL/токенов. Поведение должно быть прозрачным.
+- `x || "default"` / `x ?? "default"` для обязательных значений — запрещено. Бросать `throw`.
+- Ошибки API не глотать. 401/403 → явный переход на `/auth` + очистка токена.
+- Никаких тихих ретраев / подмен URL / токенов.
 
-## 3) API слой
+## API-слой
 
-- Единственная точка для запросов: `shared/api.ts` (`apiFetch`).
-- Всегда типизируем ответы/запросы DTO (строго, без `any`).
-- DTO лежат в `shared/dto.ts`.
-- Любой 401/403 должен приводить к **явному** переходу в `/auth` и очистке токена (не молча).
+- Единственная точка запросов: `shared/api.ts` (`apiFetch`).
+- Все запросы/ответы типизированы через DTO из `shared/dto.ts`. Без `any`.
 
-## 4) UI компоненты: независимость и предсказуемость
+## Компоненты
 
-- Компоненты — **чистые**: не выполняют сетевые запросы «в рендере».
-- Все эффекты — только в `createEffect`/ресурсах/моделях фич.
-- Компоненты `pages/chat/*` получают данные через props и не знают про `apiFetch`/WebSocket.
+- Чистые: не выполняют сетевые запросы в рендере.
+- Все эффекты — в `createEffect` / ресурсах.
+- `pages/chat/*` получают данные через props и не знают про `apiFetch`/WebSocket.
 
-## 5) SolidJS правила
+## SolidJS
 
-- В `createResource` всегда явно определяем source и fetcher, если есть зависимость (например channel_id).
-- Не допускаем неявных `null`/`undefined`:
-  - если `id` обязателен — бросаем ошибку сразу.
-- Состояние формы — в модели фичи (`features/*/model`) либо локально в компоненте, но без «расползания».
+- `createResource`: явный source + fetcher при наличии зависимости.
+- Обязательные значения без `null`/`undefined` — бросать ошибку.
 
-## 6) Realtime / WebSocket (КРИТИЧНО)
+## WebSocket (createReliableWs)
 
-- **Без хардкода WS URL.** URL строится только в `shared/ws.ts` через `new URL("/ws", window.location.href)` с `ws/wss`.
-- Подключение WS делаем только через `createReliableWs`:
-  - бесконечный реконнект
-  - экспоненциальный backoff + jitter
-  - реакция на `online` и `visibilitychange`
-- UI придерживается backend-first подхода:
-  - UI отправляет команду → показывает pending → подтверждение только по событию/результату с сервера.
-- Если `sendJson` невозможен (сокет закрыт) — pending помечаем `failed`.
+- URL строится в `shared/ws.ts` через `new URL("/ws", window.location.href)` + `ws/wss`.
+- Бесконечный реконнект, exponential backoff + jitter, реакция на `online`/`visibilitychange`.
+- Backend-first: UI отправляет команду → pending → подтверждение по событию с сервера.
+- `sendJson` невозможен (сокет закрыт) → pending помечается `failed`.
 
-## 7) Tailwind + Kobalte (Liquid Glass UI)
+## Стили
 
-- Tailwind используется для layout/utility классов.
-- Базовые стили и tokens (glass, button, input, modal) — в `styles.css`.
-- Запрещено писать «портянки» классов в 10+ строк в каждой странице: выносим в `shared/ui` компоненты.
+- Tailwind для layout/utility.
+- Базовые компоненты (glass, btn, input) определены в `styles.css` (`@layer components`).
+- Шрифт: Inter Variable (self-host из `assets/fonts/inter/`, `@font-face` в `styles.css`).
 
-## 8) Шрифты
+## CleanFirst
 
-- Шрифт UI: **Inter Variable** (self-host).
-- Файлы лежат в `apps/api/static/src/assets/fonts/inter/` и подключаются через `@font-face` в `styles.css`.
-- `fontFamily.sans` настраивается в `tailwind.config.cjs`.
-
-## 9) CleanFirst
-
-- Мёртвый код удаляем сразу.
-- Временные заглушки допускаются только если есть конкретный следующий шаг; иначе — удалить.
-
+- Мёртвый код удалять сразу. Заглушки без следующего шага — удалять.

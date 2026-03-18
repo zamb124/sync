@@ -23,16 +23,11 @@ settings = ApiSettings()
 static_dist_dir = Path(__file__).parent / "static" / "dist"
 static_assets_dir = static_dist_dir / "assets"
 static_index_html = static_dist_dir / "index.html"
+_ui_enabled = static_index_html.is_file() and static_assets_dir.is_dir()
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    if not static_index_html.is_file():
-        raise RuntimeError(
-            "Фронтенд не собран: не найден apps/api/static/dist/index.html. "
-            "Соберите UI (vite build) перед запуском сервиса."
-        )
-
     set_core_settings(settings)
 
     container = build_container(settings)
@@ -64,22 +59,22 @@ app.add_middleware(
     public_path_prefixes={"/assets/"},
 )
 
-app.mount("/assets", StaticFiles(directory=str(static_assets_dir)), name="assets")
+if _ui_enabled:
+    app.mount("/assets", StaticFiles(directory=str(static_assets_dir)), name="assets")
 
 
-@app.get("/")
-async def public_root() -> FileResponse:
-    return FileResponse(static_index_html)
+if _ui_enabled:
+    @app.get("/")
+    async def public_root() -> FileResponse:
+        return FileResponse(static_index_html)
 
+    @app.get("/auth")
+    async def auth_page() -> FileResponse:
+        return FileResponse(static_index_html)
 
-@app.get("/auth")
-async def auth_page() -> FileResponse:
-    return FileResponse(static_index_html)
-
-
-@app.get("/chat")
-async def chat_page() -> FileResponse:
-    return FileResponse(static_index_html)
+    @app.get("/chat")
+    async def chat_page() -> FileResponse:
+        return FileResponse(static_index_html)
 
 
 @app.websocket("/ws")

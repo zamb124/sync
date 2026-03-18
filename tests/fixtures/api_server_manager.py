@@ -25,7 +25,7 @@ def _find_free_port() -> int:
 
 def _wait_ready(base_url: str, *, timeout_s: float) -> None:
     deadline = time.time() + timeout_s
-    url = f"{base_url}/"
+    url = f"{base_url}/api/health"
     last_error: Exception | None = None
 
     while time.time() < deadline:

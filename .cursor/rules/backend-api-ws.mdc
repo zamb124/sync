@@ -1,0 +1,73 @@
+---
+description: "Command-First архитектура backend: единый pipeline мутаций через REST и WebSocket, обработка команд, события"
+globs:
+  - "core/**/*.py"
+  - "apps/**/*.py"
+  - "tests/**/*.py"
+---
+
+# Command-First архитектура (REST + WebSocket)
+
+REST API и WebSocket используют **единый pipeline** обработки команд.
+
+```
+REST POST /api/... ──┐
+                     ├──> TaskIQ ──> handlers.py ──> БД + Redis Pub/Sub ──> WS клиенты
+WebSocket /ws    ────┘
+```
+
+## Правила
+
+### Мутации — только через команды
+
+Все изменения данных проходят через `CommandEnvelope` → `handle_command.kiq()` → `execute_command()` в `handlers.py`.
+
+```python
+# ПРАВИЛЬНО: мутация через команду
+task = await handle_command.kiq(
+    CommandEnvelope(id=uuid4().hex, actor_user_id=user_id, type="spaces.create", payload={...}).model_dump()
+)
+res = await task.wait_result(timeout=settings.tasks.default_task_timeout)
+```
+
+```python
+# ЗАПРЕЩЕНО: прямое изменение БД в REST эндпоинте
+await repo.set(space)  # WS клиенты не получат событие!
+```
+
+### Чтение — напрямую из репозитория
+
+GET-эндпоинты обращаются к репозиториям напрямую, без команд.
+
+### Бизнес-логика — только в `handlers.py`
+
+Единая точка для всей логики мутаций: `apps/api/src/realtime/handlers.py` → `execute_command()`.
+
+### События — только из `handlers.py`
+
+`CommandExecutionResult` возвращает список `RealtimeEvent`. TaskIQ task публикует их в Redis канал `realtime.events`. Ручная публикация событий запрещена.
+
+## Добавление новой команды
+
+1. Payload-модель → `commands.py`
+2. Обработчик → `handlers.py` (`execute_command`, ветка `if cmd.type == "..."`)
+3. Событие → `events.py`
+4. REST эндпоинт (если нужен) → `api/*.py` через `handle_command.kiq()`
+5. WebSocket — работает автоматически
+
+Naming: `{entity}.{action}` (`spaces.create`, `messages.send`, `git.resources.upsert`).
+
+## WebSocket протокол
+
+**Клиент → сервер:** `{ id, type, payload }` (WsCommandFrame)
+
+**Сервер → клиент:**
+- Результат команды: `{ id, ok, result, error_code, error_detail }` (WsResultFrame)
+- Realtime-событие: `{ type, payload }` (RealtimeEvent, рассылается всем)
+
+## Запрещено
+
+- Прямые изменения БД в REST эндпоинтах (в обход команд)
+- Разная бизнес-логика для REST и WebSocket
+- Ручная публикация событий в Redis (минуя handlers)
+- События без команд
