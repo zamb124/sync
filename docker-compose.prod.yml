@@ -48,7 +48,7 @@ services:
       API__DATABASE__REDIS_URL: redis://redis:6379/0
       API__TASKS__BROKER_URL: redis://redis:6379/1
       API__TASKS__RESULT_BACKEND: redis://redis:6379/2
-      AUTH__JWT_SECRET: ${JWT_SECRET}
+      API__AUTH__JWT_SECRET: ${JWT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
@@ -62,7 +62,7 @@ services:
       uv run alembic -c apps/api/alembic.ini upgrade head
     environment:
       API__DATABASE__URL: postgresql://sync_user:${POSTGRES_PASSWORD}@postgres:5432/sync_db
-      AUTH__JWT_SECRET: ${JWT_SECRET}
+      API__AUTH__JWT_SECRET: ${JWT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy
@@ -80,7 +80,7 @@ services:
       API__DATABASE__REDIS_URL: redis://redis:6379/0
       API__TASKS__BROKER_URL: redis://redis:6379/1
       API__TASKS__RESULT_BACKEND: redis://redis:6379/2
-      AUTH__JWT_SECRET: ${JWT_SECRET}
+      API__AUTH__JWT_SECRET: ${JWT_SECRET}
     depends_on:
       postgres:
         condition: service_healthy

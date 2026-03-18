@@ -89,10 +89,10 @@ jobs:
 
             # Записываем .env из GitHub Secrets — не храним секреты на сервере вручную
             cat > /opt/sync/.env <<EOF
-            IMAGE=${IMAGE_TAG}
-            POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
-            JWT_SECRET=${JWT_SECRET}
-            EOF
+IMAGE=${IMAGE_TAG}
+POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+JWT_SECRET=${JWT_SECRET}
+EOF
 
             cd /opt/sync
 
