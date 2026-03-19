@@ -13,8 +13,8 @@ alwaysApply: true
 
 **Стек:**
 - **Backend:** Python 3.14, FastAPI, Pydantic v2, async/await
-- **БД:** PostgreSQL (мастер-данные, чат), Redis (кэш, брокер задач)
-- **TaskIQ:** Очередь задач (taskiq + taskiq-redis)
+- **БД:** PostgreSQL, Redis (кэш/очереди при необходимости)
+- **Миграции:** Alembic (внутри сервиса `apps/api`)
 
 Базовые настройки описаны через `CoreSettings` в `core.config`, а каждый сервис в `apps/*` имеет свои `Settings`, наследующиеся от `CoreSettings` (например, `ApiSettings` в `apps/api/config/config.py`), и собственный `conf.json` в папке сервиса при необходимости.
 
@@ -26,27 +26,30 @@ alwaysApply: true
 - **Нет значения в конфиге?** → `raise ValueError`, не угадывай
 - **Лозунг:** "Better to crash than to guess"
 
+## Чистота CleanFirst 
+- **ЗАПРЕТ МЕРТВОГО КОДА:** Если видим мертвый (легаси или не используемый) код, не проходим мимо УДАЛЯЕМ!!!!!!!!!
+
+## Абстракции CoreFirst 
+- **Библиотека Core важнее всех apps:** Прежде чем делать функционал надо посмотреть и проанализировать, ТОЧНО ЛИ НЕ CORE нужно понимать если мы делам новую функциональность или клиент для интеграции нужно понять будут ли его использовать только конкретный сервис из apps или лучше разместить его в core как ядро а в apps переопределить или целиком он может быть в core
+
+
 ### 2. DB-First
-- Всё хранится в БД: агенты, ноды, tools, skills, variables
-- Код — просто исполнитель инструкций из БД
-- Обновление логики → через обновление БД, не деплой кода
+- Источник правды — PostgreSQL (данные чата, пространства, каналы, треды, сообщения).
+- Схема БД фиксируется миграциями Alembic.
+- Локальная разработка и тесты поднимают отдельные окружения через docker-compose.
 
-### 3. Stream-First
-- **LLM вызывается ТОЛЬКО через `.stream()`**
-- Все события через **Redis Pub/Sub** (a2a-sdk типы)
-- Синхронных методов НЕТ
+### 3. DI-First
+- В сервисе есть DI контейнер.
+- Контейнер должен быть доступен везде в коде сервиса через `apps.<service>.container`.
+- FastAPI `Depends()` используется только как тонкий слой доступа к контейнеру в роутерах.
 
-### 4. A2A Protocol
-- **ВСЕ типы из `a2a-sdk`**: `Task`, `Message`, `TaskStatusUpdateEvent`, `TaskArtifactUpdateEvent`
-- Свои типы не создаём
+### 4. Чистая архитектура API
+- `apps/api/src/models/*` — Pydantic модели API (DTO).
+- Для работы с БД использовать репозитории в `apps/api/src/db/repositories`.
+- Не смешивать слой БД и слой API в одном типе без явной причины.
 
-### 5. Permissions
-- Группы пользователя: ТОЛЬКО `grps` (не `groups`)
-- Конфигурация permissions: ТОЛЬКО `permissions` (не `permission`)
-- Извлечение групп: ТОЛЬКО `extract_user_groups(user)`
-- Пустой список permissions = доступ для всех (не admin!)
-
-📄 **Permissions:** `.cursor/rules/permissions.mdc`
+### 5. Auth/Permissions (минимум, без фолбеков)
+- Если auth/permissions включены — отсутствие обязательных настроек должно приводить к явной ошибке на старте.
 
 ## Стандарты кода
 
@@ -139,8 +142,6 @@ export class MyComponent extends BaseComponent {
 
 ## Тестирование
 
-📄 **Полные правила:** `.cursor/rules/testing.mdc`
-
 ```bash
 # Запуск тестов
 make test                    # Через make
@@ -149,18 +150,8 @@ uv run pytest tests/path/test.py -v  # Конкретный файл
 ```
 
 **Правила:**
-- **Мок только MockLLM**, остальное реальное (PostgreSQL, Redis)
-- **Всегда используй `unique_id`** для уникальных идентификаторов
-- **ЗАПРЕЩЕНЫ фикстуры с `autouse=True`** (кроме `reset_mock_llm`)
-- Тесты должны явно указывать все зависимости в сигнатуре
-
-```python
-@pytest.mark.asyncio
-async def test_example(self, app, mock_llm_with_queue, unique_id):
-    context_id = f"test-{unique_id}"
-    session_id = f"agent_id:{context_id}"
-    ...
-```
+- Тесты в `tests/core` — быстрые unit-тесты без инфраструктуры.
+- Интеграционные тесты БД должны использовать изолированное окружение (отдельный docker-compose).
 
 ## Make команды
 
@@ -196,52 +187,8 @@ tests/                         # Тесты (tests/core, tests/conftest.py)
 
 - **Язык комментариев:** ТОЛЬКО русский
 - **Логирование:** `from core.logging import get_logger`
-- **DI:** `get_container()` (ленивая загрузка)
-- **Context:** `get_context()` (user, tenant, metadata)
-- **Variables:** `@var:key` резолвятся из БД/Vault
-- **State mapping:** `@state:path` для извлечения из state
-
-## Token Limits
-
-📄 **Полные правила:** `.cursor/rules/token-limits.mdc`
-
-- Проверка лимитов: **ДО** вызова LLM (если `enabled: true`)
-- Запись использования: **В finally блоке** после stream
-- Usage из LLM: ожидание `usage` chunk после `finish_reason`
-- Типы лимитов: ТОЛЬКО `"user"`, `"agent"`, `"user_agent"`
-- Периоды: ТОЛЬКО `"day"`, `"week"`, `"month"`, `"year"`
-
-## Frontend: Canvas стили
-
-📄 **Полные правила:** `.cursor/rules/canvas-styles.mdc`
-
-**КРИТИЧЕСКИ ВАЖНО:** Дублировать стили для обеих тем!
-
-```css
-/* Темная тема */
-.drawflow .drawflow-node.node-running {
-    border: 3px solid #3b82f6 !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), 0 0 20px rgba(59, 130, 246, 0.8) !important;
-}
-
-/* Светлая тема - ОБЯЗАТЕЛЬНО! */
-[data-theme="light"] .drawflow .drawflow-node.node-running {
-    border: 3px solid #3b82f6 !important;
-    box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.3), 0 0 20px rgba(59, 130, 246, 0.5) !important;
-}
-```
-
-**Правила:**
-- **Только CSS классы**, никаких inline стилей
-- **!important** для всех правил
-- **Синхронизировать** `drawflow-injector.js` + `drawflow.css`
-
-## Ссылки
-
-- **A2A SDK:** используй `context7` для документации
-- **Конфигурация:** `conf.json` + `conf.local.json` (локальные переопределения)
-- **API ключи:** в `conf.local.json` (не коммитить)
-- **Permissions:** `ADMIN_GROUP`, `extract_user_groups()` — только из `core.auth.permissions`
+- **DI:** `apps.<service>.container` как единая точка доступа в сервисе
+- **Конфигурация:** `conf.json` + `conf.local.json` (локальные переопределения; секреты не коммитить)
 
 ---
 

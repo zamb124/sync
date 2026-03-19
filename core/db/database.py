@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from contextlib import asynccontextmanager
 from typing import Any, AsyncIterator, Callable, Optional
 
@@ -35,10 +36,17 @@ class Database:
 
         async def _init_connection(connection: asyncpg.Connection) -> None:
             await connection.set_type_codec(
+                "json",
+                schema="pg_catalog",
+                encoder=lambda value: json.dumps(value),
+                decoder=lambda value: json.loads(value),
+                format="text",
+            )
+            await connection.set_type_codec(
                 "jsonb",
                 schema="pg_catalog",
-                encoder=lambda value: asyncpg.types.json.dumps(value),
-                decoder=asyncpg.types.json.loads,
+                encoder=lambda value: json.dumps(value),
+                decoder=lambda value: json.loads(value),
                 format="text",
             )
 

@@ -9,6 +9,17 @@ from pydantic import BaseModel, Field
 from apps.api.src.models.users import UserBrief
 
 
+class ThreadRow(BaseModel):
+    """Строка треда в базе данных."""
+
+    id: str = Field(description="Идентификатор треда.")
+    channel_id: str = Field(description="Канал, в котором находится тред.")
+    root_message_id: str = Field(description="Корневое сообщение треда.")
+    title: str | None = Field(default=None, description="Опциональный заголовок треда.")
+    created_at: datetime = Field(description="Время создания треда.")
+    created_by_user_id: str = Field(description="Создатель треда.")
+
+
 class ThreadRead(BaseModel):
     """Полная информация о треде."""
 

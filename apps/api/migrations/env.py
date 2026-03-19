@@ -22,7 +22,15 @@ target_metadata = None
 
 def _get_database_url() -> str:
     settings = ApiSettings()
-    return settings.database.url
+    url = settings.database.url
+    if url.startswith("postgresql+asyncpg://"):
+        return url
+    if url.startswith("postgresql://"):
+        return "postgresql+asyncpg://" + url.removeprefix("postgresql://")
+    raise ValueError(
+        "Некорректный DSN для Alembic async-migrations. "
+        "Ожидался 'postgresql://...' или 'postgresql+asyncpg://...'."
+    )
 
 
 def run_migrations_offline() -> None:

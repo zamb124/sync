@@ -34,12 +34,12 @@ self.base_url = base_url
 
 ### 2. Локальные импорты
 
-Все импорты — в начале файла. Единственное исключение — DI контейнер (`apps/agents/src/container.py`).
+Все импорты — в начале файла.
 
 ```python
 # ЗАПРЕЩЕНО
 def my_func():
-    from apps.agents.src.tools import finish  # локальный импорт
+    from some.module import something  # локальный импорт
 ```
 
 ### 3. try/except с проглатыванием ошибок
@@ -78,34 +78,19 @@ agent.hidden
 
 ### 5. Дублирование dict vs объект
 
-Для `Edge` всегда используй `Edge.normalize(edge)`, затем обращайся по `.from_node` / `.to_node`. Не пиши `edge.get("from") if isinstance(edge, dict) else edge.from_node`.
-
-Для извлечения групп пользователя — `extract_user_groups(user)` из `core.auth.permissions`. Не дублируй `user.get("grps") or user.get("groups")`.
+Не дублируй логику преобразования/валидации данных. Если есть единая утилита/слой (например, репозиторий) — используй его.
 
 ### 6. Хардкоженные значения в рантайме
 
 VIN, URL, промпты, agent_id — всё из конфигурации. Если нет — `raise ValueError`.
 
-## Stream-First
-
-LLM вызывается ТОЛЬКО через `.stream()`. Синхронных методов НЕТ.
-
-```python
-async for event in llm.stream(messages, tools, task_id, context_id):
-    yield event
-```
-
 ### 7 ТЕСТЫ
 
 ТЕСТЫ ЗАПУСКАЮТСЯ ЧЕРЕЗ pytest и UV!
 
-## A2A типы
-
-Все типы из `a2a-sdk`. Свои типы для сообщений, событий, задач не создаём.
-
 ## Импорты
 
-- Все импорты в начале файла (локальные — только в `container.py`)
+- Все импорты в начале файла
 - `from core.logging import get_logger` (не `import logging`)
 - Сначала core, потом apps
 
@@ -122,23 +107,9 @@ async for event in llm.stream(messages, tools, task_id, context_id):
 - Лучше явная ошибка, чем скрытое неверное поведение
 - Redis / S3 / Vault не работает — система падает (`raise`)
 
-Единственное исключение — `AgentInterrupt`:
-```python
-try:
-    result = await tool.run(args, state)
-except AgentInterrupt as e:
-    raise
-```
-
-## Изоляция агентов
-
-Агент — полная изолированная конструкция. Конфиг должен быть самодостаточным. Никаких внешних дефолтов.
-
 ## Асинхронность
 
-- Все tools — `async def`
-- `LLMClient.stream()` — async generator
-- `EventEmitter.emit*()` — async
+- Все IO-операции в сервисах — `async def` (FastAPI handlers, репозитории, клиенты).
 
 ## Тесты
 

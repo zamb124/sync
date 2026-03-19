@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter
 
-from apps.api.api import channels, files, git, health, messages, spaces, threads
+from apps.api.api import auth, channels, files, git, health, messages, spaces, threads
 
 
 def get_api_router() -> APIRouter:
@@ -12,6 +12,7 @@ def get_api_router() -> APIRouter:
     router = APIRouter()
 
     router.include_router(health.router, tags=["health"])
+    router.include_router(auth.router, prefix="/auth", tags=["auth"])
     router.include_router(spaces.router, prefix="/spaces", tags=["spaces"])
     router.include_router(channels.router, prefix="/channels", tags=["channels"])
     router.include_router(threads.router, prefix="/threads", tags=["threads"])
@@ -21,3 +22,4 @@ def get_api_router() -> APIRouter:
 
     return router
 
+__all__ = ["get_api_router"]

@@ -129,3 +129,26 @@ class MessageCreate(BaseModel):
         description="Блоки контента нового сообщения.",
     )
 
+
+class MessageRow(BaseModel):
+    """Строка сообщения в базе данных."""
+
+    id: str = Field(description="Идентификатор сообщения.")
+    channel_id: str = Field(description="Канал, в котором находится сообщение.")
+    thread_id: str | None = Field(default=None, description="Тред сообщения.")
+    parent_message_id: str | None = Field(default=None, description="Родительское сообщение.")
+    sender_user_id: str = Field(description="Идентификатор отправителя.")
+    status: str = Field(description="Статус доставки сообщения.")
+    sent_at: datetime = Field(description="Время отправки сообщения.")
+    edited_at: datetime | None = Field(default=None, description="Время редактирования.")
+
+
+class MessageContentRow(BaseModel):
+    """Строка контента сообщения в базе данных."""
+
+    id: int = Field(description="Идентификатор строки контента.")
+    message_id: str = Field(description="Идентификатор сообщения.")
+    type: str = Field(description="Тип блока контента.")
+    order: int = Field(description="Порядок блока.")
+    data: dict = Field(description="JSON-данные блока.")
+

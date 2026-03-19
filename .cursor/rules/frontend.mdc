@@ -1,0 +1,95 @@
+---
+alwaysApply: true
+---
+
+# Frontend правила Sync (SolidJS + Vite + Tailwind + Kobalte)
+
+Цель: **строгая, надёжная архитектура UI** для чата. Минимум скрытой магии, предсказуемые зависимости, единые DTO/контракты с API, устойчивый realtime.
+
+## 1) Архитектура: фичи как независимые модули
+
+Frontend живёт в `apps/api/static/src`.
+
+### Обязательная структура
+
+```
+src/
+  app/                 # роутинг, композиция экранов, провайдеры
+  pages/               # страницы (контейнеры состояния)
+    ChatPage.tsx       # контейнер: state/handlers/compose layout
+    chat/              # компоненты страницы чата
+      Sidebar.tsx
+      Header.tsx
+      ChannelPickerGrid.tsx
+      MessageList.tsx
+      MessageBubble.tsx
+      Composer.tsx
+  shared/              # инфраструктура и общие примитивы (без бизнес-логики)
+    api.ts             # apiFetch + ApiError, всегда Authorization: Bearer
+    auth.ts            # token storage + getCurrentUserId()
+    ws.ts              # createReliableWs: реконнект/backoff/jitter, без хардкода URL
+    dto.ts             # DTO (Space/Channel/Message и др.)
+  styles.css
+  main.tsx
+```
+
+### Жёсткие границы импортов (КРИТИЧНО)
+- `shared/*` не импортирует `pages/*`.
+- Компоненты в `pages/chat/*` не ходят в сеть и не держат глобальное состояние: получают данные/коллбеки через props.
+
+## 2) Zero‑Guess на фронте (как на бэке)
+
+- **Запрещены скрытые фолбеки**, которые маскируют отсутствие данных:
+  - `x || "default"` / `x ?? "default"` для обязательных значений из API/контекста.
+  - Если значение обязательно — **бросаем ошибку** (throw) как можно ближе к месту использования.
+- Ошибки API не «глотаем». Если не можем обработать — пробрасываем/показываем UI‑ошибку.
+- Не делаем «тихие» автоматические ретраи/подмены URL/токенов. Поведение должно быть прозрачным.
+
+## 3) API слой
+
+- Единственная точка для запросов: `shared/api.ts` (`apiFetch`).
+- Всегда типизируем ответы/запросы DTO (строго, без `any`).
+- DTO лежат в `shared/dto.ts`.
+- Любой 401/403 должен приводить к **явному** переходу в `/auth` и очистке токена (не молча).
+
+## 4) UI компоненты: независимость и предсказуемость
+
+- Компоненты — **чистые**: не выполняют сетевые запросы «в рендере».
+- Все эффекты — только в `createEffect`/ресурсах/моделях фич.
+- Компоненты `pages/chat/*` получают данные через props и не знают про `apiFetch`/WebSocket.
+
+## 5) SolidJS правила
+
+- В `createResource` всегда явно определяем source и fetcher, если есть зависимость (например channel_id).
+- Не допускаем неявных `null`/`undefined`:
+  - если `id` обязателен — бросаем ошибку сразу.
+- Состояние формы — в модели фичи (`features/*/model`) либо локально в компоненте, но без «расползания».
+
+## 6) Realtime / WebSocket (КРИТИЧНО)
+
+- **Без хардкода WS URL.** URL строится только в `shared/ws.ts` через `new URL("/ws", window.location.href)` с `ws/wss`.
+- Подключение WS делаем только через `createReliableWs`:
+  - бесконечный реконнект
+  - экспоненциальный backoff + jitter
+  - реакция на `online` и `visibilitychange`
+- UI придерживается backend-first подхода:
+  - UI отправляет команду → показывает pending → подтверждение только по событию/результату с сервера.
+- Если `sendJson` невозможен (сокет закрыт) — pending помечаем `failed`.
+
+## 7) Tailwind + Kobalte (Liquid Glass UI)
+
+- Tailwind используется для layout/utility классов.
+- Базовые стили и tokens (glass, button, input, modal) — в `styles.css`.
+- Запрещено писать «портянки» классов в 10+ строк в каждой странице: выносим в `shared/ui` компоненты.
+
+## 8) Шрифты
+
+- Шрифт UI: **Inter Variable** (self-host).
+- Файлы лежат в `apps/api/static/src/assets/fonts/inter/` и подключаются через `@font-face` в `styles.css`.
+- `fontFamily.sans` настраивается в `tailwind.config.cjs`.
+
+## 9) CleanFirst
+
+- Мёртвый код удаляем сразу.
+- Временные заглушки допускаются только если есть конкретный следующий шаг; иначе — удалить.
+

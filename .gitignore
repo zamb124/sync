@@ -1,0 +1,45 @@
+# Python
+.venv/
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+.cache/
+
+# Node / JS (Vite/Solid)
+**/node_modules/
+**/dist/
+**/build/
+**/.vite/
+**/.turbo/
+**/.cache/
+**/coverage/
+**/.next/
+**/.svelte-kit/
+**/storybook-static/
+**/out/
+
+**/*.tsbuildinfo
+
+# JetBrains
+.idea/
+*.iml
+
+# OS
+.DS_Store
+
+# Local environment files
+.env
+.env.*
+
+# Docs draft (not part of repo)
+/Архитектура API для инжиниринг-чата_ от полиморфных объектов к гибким рабочим пространствам и двусторонней интеграции с GitLab.pdf

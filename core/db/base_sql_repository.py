@@ -2,11 +2,21 @@
 
 from __future__ import annotations
 
-from typing import Any, Generic, Optional, Sequence, TypeVar
+from typing import Any, Generic, Optional, Sequence, TypeVar, Type, cast
 
 import asyncpg
+from fastapi import Depends
+from pydantic import BaseModel
 
 from core.db import Database
+from core.di import get_container as get_core_container
+
+
+T = TypeVar("T")
+
+
+def _get_database_from_container() -> Database:
+    return get_core_container().resolve(Database)
 
 
 class BaseSQLRepository:
@@ -16,7 +26,7 @@ class BaseSQLRepository:
     наследуются от этого класса и реализуют только доменно-специфичные методы.
     """
 
-    def __init__(self, database: Database) -> None:
+    def __init__(self, database: Database = Depends(_get_database_from_container)) -> None:
         self._database = database
 
     @property
@@ -52,13 +62,12 @@ class BaseSQLRepository:
             await self.execute(query, *args)
 
 
-T = TypeVar("T")
-
-
 class CoreRepository(BaseSQLRepository, Generic[T]):
     """Базовый репозиторий сущности с единым интерфейсом get/set/list/delete."""
 
-    def __init__(self, database: Database) -> None:
+    model_class: Type[BaseModel] | None = None
+
+    def __init__(self, database: Database = Depends(_get_database_from_container)) -> None:
         super().__init__(database)
 
     def _table_name(self) -> str:
@@ -67,12 +76,28 @@ class CoreRepository(BaseSQLRepository, Generic[T]):
     def _pk_column(self) -> str:
         return "id"
 
+    def _get_model_class(self) -> Type[BaseModel]:
+        if self.model_class is None:
+            raise RuntimeError(
+                "model_class не задан в репозитории. "
+                "Задайте model_class = <PydanticModel> в наследнике CoreRepository."
+            )
+        return self.model_class
+
     def _from_row(self, row: asyncpg.Record) -> T:
-        raise NotImplementedError("Метод _from_row() должен быть реализован в наследнике.")
+        model_cls = self._get_model_class()
+        obj = model_cls.model_validate(dict(row))
+        return cast(T, obj)
 
     def _to_row(self, entity: T) -> dict[str, Any]:
-        raise NotImplementedError("Метод _to_row() должен быть реализован в наследнике.")
+        if not isinstance(entity, BaseModel):
+            raise RuntimeError(
+                "Сущность репозитория должна быть Pydantic-моделью (BaseModel), "
+                "либо переопределите _to_row/_from_row в репозитории."
+            )
+        return entity.model_dump()
 
+    
     async def get(self, entity_id: str) -> Optional[T]:
         query = f"""
         SELECT *
@@ -84,6 +109,7 @@ class CoreRepository(BaseSQLRepository, Generic[T]):
             return None
         return self._from_row(row)
 
+    
     async def delete(self, entity_id: str) -> None:
         query = f"""
         DELETE FROM {self._table_name()}
@@ -94,13 +120,14 @@ class CoreRepository(BaseSQLRepository, Generic[T]):
     async def list(self, limit: int, offset: int) -> list[T]:
         query = f"""
         SELECT *
-        FROM {self._table_name()}
+        FROM {self._table_name()} 
         ORDER BY {self._pk_column()}
         LIMIT $1 OFFSET $2
         """
         rows = await self.fetch(query, limit, offset)
         return [self._from_row(row) for row in rows]
 
+    
     async def set(self, entity: T) -> T:
         data = self._to_row(entity)
         columns = ", ".join(data.keys())
@@ -117,5 +144,3 @@ class CoreRepository(BaseSQLRepository, Generic[T]):
         """
         await self.execute(query, *data.values())
         return entity
-
-

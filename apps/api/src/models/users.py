@@ -19,6 +19,11 @@ class UserBrief(BaseModel):
 class UserRead(UserBrief):
     """Полная модель пользователя для ответов API."""
 
+    email: str = Field(description="Email пользователя (уникальный).")
+    username: str = Field(description="Username пользователя (уникальный).")
+    first_name: str = Field(description="Имя пользователя.")
+    last_name: str = Field(description="Фамилия пользователя.")
+    is_active: bool = Field(description="Флаг активности пользователя.")
     external_id: str | None = Field(
         default=None,
         description="Внешний идентификатор (SSO/Git-провайдер).",

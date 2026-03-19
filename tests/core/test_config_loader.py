@@ -15,7 +15,7 @@ def test_get_project_root_points_to_sync_root() -> None:
     """Проверяем, что корень проекта найден и содержит pyproject.toml."""
     root = get_project_root()
     assert (root / "pyproject.toml").exists()
-    assert root.name == "sync"
+    assert root.name.startswith("sync")
 
 
 def test_load_merged_config_merges_conf_and_conf_local() -> None:

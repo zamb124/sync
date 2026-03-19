@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from pydantic import BaseModel, Field
+from pydantic_settings import SettingsConfigDict
 
 from core.config import CoreSettings
 
@@ -29,4 +30,8 @@ class ApiSettings(CoreSettings):
     database: ApiDatabaseConfig = Field(
         description="Настройки соединения API-сервиса с PostgreSQL и Redis.",
     )
+
+    _base_model_config = dict(CoreSettings.model_config)
+    _base_model_config["env_prefix"] = "API__"
+    model_config = SettingsConfigDict(**_base_model_config)
 
