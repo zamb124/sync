@@ -30,6 +30,9 @@ htmlcov/
 
 **/*.tsbuildinfo
 
+# TypeScript (any depth)
+**/*.tsbuildinfo
+
 # JetBrains
 .idea/
 *.iml
