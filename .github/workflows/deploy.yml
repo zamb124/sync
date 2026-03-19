@@ -96,14 +96,17 @@ jobs:
             # Логинимся в ghcr.io
             echo "${GHCR_TOKEN}" | docker login ghcr.io -u "${GITHUB_ACTOR}" --password-stdin
 
-            # Скачиваем новый образ
+            # Скачиваем нужные образы приложений
             docker compose -f docker-compose.prod.yml pull api chat_worker
+
+            # Поднимаем инфраструктуру стека, даже если её ранее не было
+            docker compose -f docker-compose.prod.yml up -d postgres redis
 
             # Прогоняем миграции
             docker compose -f docker-compose.prod.yml run --rm migrate
 
-            # Перезапускаем только api и chat_worker (postgres и redis не трогаем)
-            docker compose -f docker-compose.prod.yml up -d --no-deps api chat_worker
+            # Обновляем приложения
+            docker compose -f docker-compose.prod.yml up -d api chat_worker
 
             # Убираем старые образы
             docker image prune -f
